@@ -1,10 +1,71 @@
 #include <windows.h>
 
-LRESULT CALLBACK MainWindowCallback( // Passes message information to the specified window procedure.
-    HWND WindowHandle,               // A handle to the window procedure to receive the message.
-    UINT Message,                    // The message.
-    WPARAM WParam,                   // Additional message-specific information. The contents of this parameter depend on the value of the Msg parameter.
-    LPARAM LParam                    // Additional message-specific information. The contents of this parameter depend on the value of the Msg parameter.
+#define internal_variable static 
+#define local_persist static 
+#define global_variable static 
+
+global_variable bool Running;
+global_variable BITMAPINFO BitmapInfo = {}; // The BITMAPINFO structure defines the dimensions and color information for a DIB. 
+global_variable void* BitmapMemory;
+global_variable HBITMAP BitmapHandle;
+global_variable HDC BitmapDeviceContext;
+void Win32ResizeDIBSection(long Width, long Height)
+{
+    if(BitmapHandle) {
+        /*BOOL*/ DeleteObject(              // The DeleteObject function deletes a logical pen, brush, font, bitmap, region, or palette, freeing all system resources associated with the object.
+            BitmapHandle // [in] HGDIOBJ ho // A handle to a logical pen, brush, font, bitmap, region, or palette.
+        );
+    }
+
+    if(!BitmapDeviceContext)
+    {
+        BitmapDeviceContext = CreateCompatibleDC( // The CreateCompatibleDC function creates a memory device context (DC) compatible with the specified device.
+            NULL // [in] HDC hdc                  // A handle to an existing DC or NULL.
+        );
+    }
+
+    BitmapInfo.bmiHeader.biSize          = sizeof(BitmapInfo.bmiHeader); // The number of bytes required by the structure.
+    BitmapInfo.bmiHeader.biWidth         = Width;                        // The width of the bitmap, in pixels.
+    BitmapInfo.bmiHeader.biHeight        = Height;                       // The height of the bitmap, in pixels.
+    BitmapInfo.bmiHeader.biPlanes        = 1;                            // The number of planes for the target device. This value must be set to 1.
+    BitmapInfo.bmiHeader.biBitCount      = 32;                           // The number of bits-per-pixel.
+    BitmapInfo.bmiHeader.biCompression   = BI_RGB;                       // The type of compression for a compressed bottom-up bitmap (top-down DIBs cannot be compressed).
+
+    BitmapHandle = CreateDIBSection(                             // The CreateDIBSection function creates a DIB that applications can write to directly.
+        BitmapDeviceContext, // [in]  HDC              hdc,      // A handle to a device context.
+        &BitmapInfo,         // [in]  const BITMAPINFO * pbmi,   // A pointer to a BITMAPINFO structure that specifies various attributes of the DIB, including the bitmap dimensions and colors.
+        DIB_RGB_COLORS,      // [in]  UINT             usage,    // The type of data contained in the bmiColors array member of the BITMAPINFO structure pointed to by pbmi.
+        &BitmapMemory,       // [out] VOID * *ppvBits            // A pointer to a variable that receives a pointer to the location of the DIB bit values.
+        NULL,                // [in]  HANDLE           hSection, // A handle to a file-mapping object that the function will use to create the DIB. This parameter can be NULL.
+        NULL                 // [in]  DWORD            offset    // The offset from the beginning of the file-mapping object referenced by hSection where storage for the bitmap bit values is to begin.
+    );
+}
+
+void Win32UpdateWindow(HDC DeviceContext, long X, long Y, long Width, long Height)
+{
+    // TODO: Research Stretch DIBits.
+    /*int*/ StretchDIBits(
+        DeviceContext,  // [in] HDC              hdc,
+        X,              // [in] int              xDest,
+        Y,              // [in] int              yDest,
+        Width,          // [in] int              DestWidth,
+        Height,         // [in] int              DestHeight,
+        X,              // [in] int              xSrc,
+        Y,              // [in] int              ySrc,
+        Width,          // [in] int              SrcWidth,
+        Height,         // [in] int              SrcHeight,
+        BitmapMemory,  // [in] const VOID * lpBits,
+        &BitmapInfo,    // [in] const BITMAPINFO * lpbmi,
+        DIB_RGB_COLORS, // [in] UINT             iUsage,
+        SRCCOPY// [in] DWORD            rop
+    );
+}
+
+LRESULT CALLBACK Win32MainWindowCallback( // Passes message information to the specified window procedure.
+    HWND WindowHandle,                    // A handle to the window procedure to receive the message.
+    UINT Message,                         // The message.
+    WPARAM WParam,                        // Additional message-specific information. The contents of this parameter depend on the value of the Msg parameter.
+    LPARAM LParam                         // Additional message-specific information. The contents of this parameter depend on the value of the Msg parameter.
 )
 {
     LRESULT Result = 0;
@@ -13,16 +74,26 @@ LRESULT CALLBACK MainWindowCallback( // Passes message information to the specif
     {
     case WM_SIZE:
     {
+        // TODO: Research GetClientRect.
+        RECT ClientRect;
+        /*BOOL*/ GetClientRect(                  // Retrieves the coordinates of a window's client area.
+            WindowHandle, // [in]  HWND   hWnd,  // A handle to the window whose client coordinates are to be retrieved.
+            &ClientRect   // [out] LPRECT lpRect // A pointer to a RECT structure that receives the client coordinates.
+        );
+
+        Win32ResizeDIBSection(ClientRect.right, ClientRect.bottom);
+
         /*void*/ OutputDebugString(                               // Sends a string to the debugger for display.
             L"WM_SIZE\n" // [in, optional] LPCWSTR lpOutputString // The null-terminated string to be displayed.
         );
     } break;
 
-    case WM_DESTROY:
-    {
+    case WM_DESTROY: {
         /*void*/ OutputDebugString(
             L"WM_DESTROY\n" // [in, optional] LPCWSTR lpOutputString
         );
+
+        Running = false;
     } break;
 
     case WM_CLOSE:
@@ -30,7 +101,8 @@ LRESULT CALLBACK MainWindowCallback( // Passes message information to the specif
         /*void*/ OutputDebugString(
             L"WM_CLOSE\n"
         );
-        // TODO: Close the window when this message is sent (will be done in a later stream).
+        
+        Running = false;
     } break;
 
     case WM_ACTIVATEAPP:
@@ -52,14 +124,11 @@ LRESULT CALLBACK MainWindowCallback( // Passes message information to the specif
             &Paint        // [out] LPPAINTSTRUCT lpPaint // Pointer to the PAINTSTRUCT structure that will receive painting information.
         );
 
-        /*BOOL*/ PatBlt(                                                 // The PatBlt function paints the specified rectangle using the brush that is currently selected into the specified device context.
-            DeviceContext,                            // [in] HDC   hdc, // A handle to the device context.
-            Paint.rcPaint.left,                       // [in] int   x,   // The x-coordinate, in logical units, of the upper-left corner of the rectangle to be filled.
-            Paint.rcPaint.top,                        // [in] int   y,   // The y-coordinate, in logical units, of the upper-left corner of the rectangle to be filled.
-            Paint.rcPaint.right - Paint.rcPaint.left, // [in] int   w,   // The width, in logical units, of the rectangle.
-            Paint.rcPaint.bottom - Paint.rcPaint.top, // [in] int   h,   // The height, in logical units, of the rectangle.
-            WHITENESS                                 // [in] DWORD rop  // The raster operation code
-        );
+        long x = Paint.rcPaint.left;
+        long y = Paint.rcPaint.top;
+        long w = Paint.rcPaint.right - x;
+        long h = Paint.rcPaint.bottom - y;
+        Win32UpdateWindow(DeviceContext, x, y, w, h);
 
         /*BOOL*/ EndPaint(                                    // The EndPaint function marks the end of painting in the specified window.
             WindowHandle, // [in] HWND              hWnd,     // Handle to the window that has been repainted.
@@ -107,10 +176,10 @@ int WINAPI wWinMain(
     _In_ int ShowCode                // Flags that indicate whether the appication should be minimized, maximized, or displayed normally.
 )
 {
-    WNDCLASSEXW WindowClass = {};                        // Contains window class information. It is used with the RegisterClassEx and GetClassInfoEx functions.
-    WindowClass.cbSize = sizeof(WNDCLASSEXW);       // The size, in bytes, of this structure.
-    WindowClass.lpfnWndProc = MainWindowCallback;        // The callback function that was deffined above. Windows will send messages to it.
-    WindowClass.hInstance = Instance;                  // A handle to the instance that contains the window procedure for the class.
+    WNDCLASSEXW WindowClass = {};                          // Contains window class information. It is used with the RegisterClassEx and GetClassInfoEx functions.
+    WindowClass.cbSize = sizeof(WNDCLASSEXW);              // The size, in bytes, of this structure.
+    WindowClass.lpfnWndProc = Win32MainWindowCallback;     // The callback function that was deffined above. Windows will send messages to it.
+    WindowClass.hInstance = Instance;                      // A handle to the instance that contains the window procedure for the class.
     WindowClass.lpszClassName = L"HandmadHeroWindowClass"; // The class name can be any name registered with RegisterClassEx, or any of the predefined control-class names.
 
     ATOM RegisterClassAtom = RegisterClassExW(                // Registers a window class for subsequent use in calls to the CreateWindowEx function.
@@ -142,8 +211,9 @@ int WINAPI wWinMain(
         // TODO: Logging (Will be done in a later stream).
     }
 
+    Running = true;
     MSG Message;
-    for (;;) {
+    while (Running) {
         BOOL MessageResult = GetMessageW(                    // Retrieves a message from the calling thread's message queue. The function dispatches incoming sent messages until a posted message is available for retrieval.
             &Message, // [out]          LPMSG lpMsg,         // A pointer to an MSG structure that receives message information from the thread's message queue.
             NULL,     // [in, optional] HWND  hWnd,          // A handle to the window whose messages are to be retrieved. The window must belong to the current thread
@@ -151,8 +221,13 @@ int WINAPI wWinMain(
             NULL      // [in]           UINT  wMsgFilterMax  // The integer value of the highest message value to be retrieved.
         );
 
-        if (MessageResult <= 0) {
+        if (MessageResult == 0)
+        {
             break;
+        }
+        else if (MessageResult < 0)
+        {
+
         }
 
         /*BOOL*/ TranslateMessage(             // Translates virtual-key messages into character messages.
