@@ -7,57 +7,87 @@
 global_variable bool Running;
 global_variable BITMAPINFO BitmapInfo = {}; // The BITMAPINFO structure defines the dimensions and color information for a DIB. 
 global_variable void* BitmapMemory;
-global_variable HBITMAP BitmapHandle;
-global_variable HDC BitmapDeviceContext;
+global_variable int BitmapWidth;
+global_variable int BitmapHeight;
+global_variable const unsigned char BytesPerPixel = 4;
+
+void RenderWeirdGradient(int xOffset, int yOffset)
+{
+    const int pitch = BitmapWidth * BytesPerPixel;
+    unsigned char* row = (unsigned char*) BitmapMemory;
+    for(int y = 0; y < BitmapHeight; y++)
+    {
+        unsigned char* pixel = (unsigned char*) row;
+        for(int x = 0; x < BitmapWidth; x++)
+        {
+            // Blue
+            *pixel = (unsigned char) (x + xOffset);
+            pixel++;
+
+            // Green
+            *pixel = (unsigned char) (y + yOffset);
+            pixel++;
+
+            // Red
+            *pixel = (unsigned char) 0;
+            pixel++;
+
+            // Padding
+            *pixel = (unsigned char) 0;
+            pixel++;
+        }
+        row += pitch;
+    }
+}
+
 void Win32ResizeDIBSection(long Width, long Height)
 {
-    if(BitmapHandle) {
-        /*BOOL*/ DeleteObject(              // The DeleteObject function deletes a logical pen, brush, font, bitmap, region, or palette, freeing all system resources associated with the object.
-            BitmapHandle // [in] HGDIOBJ ho // A handle to a logical pen, brush, font, bitmap, region, or palette.
-        );
-    }
-
-    if(!BitmapDeviceContext)
+    if(BitmapMemory)
     {
-        BitmapDeviceContext = CreateCompatibleDC( // The CreateCompatibleDC function creates a memory device context (DC) compatible with the specified device.
-            NULL // [in] HDC hdc                  // A handle to an existing DC or NULL.
+        /*BOOL*/ VirtualFree(                       // Releases, decommits, or releases and decommits a region of pages within the virtual address space of the calling process.
+            BitmapMemory, // [in] LPVOID lpAddress, // A pointer to the base address of the region of pages to be freed.
+            NULL,         // [in] SIZE_T dwSize,    // The size of the region of memory to be freed, in bytes or NULL.
+            MEM_RELEASE   // [in] DWORD  dwFreeType // The type of free operation.
         );
     }
+    
+    BitmapWidth = Width;
+    BitmapHeight = Height;
 
     BitmapInfo.bmiHeader.biSize          = sizeof(BitmapInfo.bmiHeader); // The number of bytes required by the structure.
-    BitmapInfo.bmiHeader.biWidth         = Width;                        // The width of the bitmap, in pixels.
-    BitmapInfo.bmiHeader.biHeight        = Height;                       // The height of the bitmap, in pixels.
+    BitmapInfo.bmiHeader.biWidth         = BitmapWidth;                  // The width of the bitmap, in pixels.
+    BitmapInfo.bmiHeader.biHeight        = -BitmapHeight;                // The height of the bitmap, in pixels.
     BitmapInfo.bmiHeader.biPlanes        = 1;                            // The number of planes for the target device. This value must be set to 1.
     BitmapInfo.bmiHeader.biBitCount      = 32;                           // The number of bits-per-pixel.
     BitmapInfo.bmiHeader.biCompression   = BI_RGB;                       // The type of compression for a compressed bottom-up bitmap (top-down DIBs cannot be compressed).
 
-    BitmapHandle = CreateDIBSection(                             // The CreateDIBSection function creates a DIB that applications can write to directly.
-        BitmapDeviceContext, // [in]  HDC              hdc,      // A handle to a device context.
-        &BitmapInfo,         // [in]  const BITMAPINFO * pbmi,   // A pointer to a BITMAPINFO structure that specifies various attributes of the DIB, including the bitmap dimensions and colors.
-        DIB_RGB_COLORS,      // [in]  UINT             usage,    // The type of data contained in the bmiColors array member of the BITMAPINFO structure pointed to by pbmi.
-        &BitmapMemory,       // [out] VOID * *ppvBits            // A pointer to a variable that receives a pointer to the location of the DIB bit values.
-        NULL,                // [in]  HANDLE           hSection, // A handle to a file-mapping object that the function will use to create the DIB. This parameter can be NULL.
-        NULL                 // [in]  DWORD            offset    // The offset from the beginning of the file-mapping object referenced by hSection where storage for the bitmap bit values is to begin.
+    long BitmapMemorySize = BitmapWidth * BitmapHeight * BytesPerPixel;
+    BitmapMemory = VirtualAlloc(                                     // Reserves, commits, or changes the state of a region of pages in the virtual address space of the calling process.
+        NULL,             // [in, optional] LPVOID lpAddress,        // The starting address of the region to allocate.
+        BitmapMemorySize, // [in]           SIZE_T dwSize,           // The size of the region, in bytes.
+        MEM_COMMIT,       // [in]           DWORD  flAllocationType, // The type of memory allocation.
+        PAGE_READWRITE    // [in]           DWORD  flProtect         // The memory protection for the region of pages to be allocated.
     );
 }
 
-void Win32UpdateWindow(HDC DeviceContext, long X, long Y, long Width, long Height)
+void Win32UpdateWindow(HDC DeviceContext, RECT* WindowRect)
 {
-    // TODO: Research Stretch DIBits.
+    int WindowHeight = WindowRect->bottom - WindowRect->top;
+    int WindowWidth = WindowRect->right - WindowRect->left;
     /*int*/ StretchDIBits(
         DeviceContext,  // [in] HDC              hdc,
-        X,              // [in] int              xDest,
-        Y,              // [in] int              yDest,
-        Width,          // [in] int              DestWidth,
-        Height,         // [in] int              DestHeight,
-        X,              // [in] int              xSrc,
-        Y,              // [in] int              ySrc,
-        Width,          // [in] int              SrcWidth,
-        Height,         // [in] int              SrcHeight,
-        BitmapMemory,  // [in] const VOID * lpBits,
+        0,              // [in] int              xDest,
+        0,              // [in] int              yDest,
+        BitmapWidth,    // [in] int              DestWidth,
+        BitmapHeight,   // [in] int              DestHeight,
+        0,              // [in] int              xSrc,
+        0,              // [in] int              ySrc,
+        WindowWidth,    // [in] int              SrcWidth,
+        WindowHeight,   // [in] int              SrcHeight,
+        BitmapMemory,   // [in] const VOID * lpBits,
         &BitmapInfo,    // [in] const BITMAPINFO * lpbmi,
         DIB_RGB_COLORS, // [in] UINT             iUsage,
-        SRCCOPY// [in] DWORD            rop
+        SRCCOPY         // [in] DWORD            rop
     );
 }
 
@@ -74,7 +104,6 @@ LRESULT CALLBACK Win32MainWindowCallback( // Passes message information to the s
     {
     case WM_SIZE:
     {
-        // TODO: Research GetClientRect.
         RECT ClientRect;
         /*BOOL*/ GetClientRect(                  // Retrieves the coordinates of a window's client area.
             WindowHandle, // [in]  HWND   hWnd,  // A handle to the window whose client coordinates are to be retrieved.
@@ -124,11 +153,13 @@ LRESULT CALLBACK Win32MainWindowCallback( // Passes message information to the s
             &Paint        // [out] LPPAINTSTRUCT lpPaint // Pointer to the PAINTSTRUCT structure that will receive painting information.
         );
 
-        long x = Paint.rcPaint.left;
-        long y = Paint.rcPaint.top;
-        long w = Paint.rcPaint.right - x;
-        long h = Paint.rcPaint.bottom - y;
-        Win32UpdateWindow(DeviceContext, x, y, w, h);
+        RECT ClientRect;
+        /*BOOL*/ GetClientRect(                  // Retrieves the coordinates of a window's client area.
+            WindowHandle, // [in]  HWND   hWnd,  // A handle to the window whose client coordinates are to be retrieved.
+            &ClientRect   // [out] LPRECT lpRect // A pointer to a RECT structure that receives the client coordinates.
+        );
+
+        Win32UpdateWindow(DeviceContext, &ClientRect);
 
         /*BOOL*/ EndPaint(                                    // The EndPaint function marks the end of painting in the specified window.
             WindowHandle, // [in] HWND              hWnd,     // Handle to the window that has been repainted.
@@ -209,34 +240,40 @@ int WINAPI wWinMain(
     if (!WindowHandle)
     {
         // TODO: Logging (Will be done in a later stream).
+        return 1;
     }
 
     Running = true;
     MSG Message;
+    int xOffset = 0;
+    int yOffset = 0;
     while (Running) {
-        BOOL MessageResult = GetMessageW(                    // Retrieves a message from the calling thread's message queue. The function dispatches incoming sent messages until a posted message is available for retrieval.
-            &Message, // [out]          LPMSG lpMsg,         // A pointer to an MSG structure that receives message information from the thread's message queue.
-            NULL,     // [in, optional] HWND  hWnd,          // A handle to the window whose messages are to be retrieved. The window must belong to the current thread
-            NULL,     // [in]           UINT  wMsgFilterMin, // The integer value of the lowest message value to be retrieved.
-            NULL      // [in]           UINT  wMsgFilterMax  // The integer value of the highest message value to be retrieved.
-        );
-
-        if (MessageResult == 0)
+        while(PeekMessageW(&Message, NULL, NULL, NULL, PM_REMOVE))
         {
-            break;
-        }
-        else if (MessageResult < 0)
-        {
+            if(Message.message == WM_QUIT)
+            {
+                Running = false;
+            }
+
+            /*BOOL*/ TranslateMessage(             // Translates virtual-key messages into character messages.
+                &Message // [in] const MSG * lpMsg // A pointer to an MSG structure that contains message information retrieved from the calling thread's message queue by using the GetMessage or PeekMessage function.
+            );
+
+            /*LRESULT*/ DispatchMessageW(          // Dispatches a message to a window procedure.
+                &Message // [in] const MSG * lpMsg // A pointer to a structure that contains the message.
+            );                                     // The return value specifies the value returned by the window procedure. Although its meaning depends on the message being dispatched, the return value generally is ignored.
 
         }
 
-        /*BOOL*/ TranslateMessage(             // Translates virtual-key messages into character messages.
-            &Message // [in] const MSG * lpMsg // A pointer to an MSG structure that contains message information retrieved from the calling thread's message queue by using the GetMessage or PeekMessage function.
-        );
+        RenderWeirdGradient(xOffset, yOffset);
 
-        /*LRESULT*/ DispatchMessageW(          // Dispatches a message to a window procedure.
-            &Message // [in] const MSG * lpMsg // A pointer to a structure that contains the message.
-        );                                     // The return value specifies the value returned by the window procedure. Although its meaning depends on the message being dispatched, the return value generally is ignored.
+        HDC DeviceContext = GetDC(WindowHandle);
+        RECT ClientRect;
+        GetClientRect(WindowHandle, &ClientRect);
+        Win32UpdateWindow(DeviceContext, &ClientRect);
+        ReleaseDC(WindowHandle, DeviceContext);
+
+        xOffset++;
     }
 
     return 0;
