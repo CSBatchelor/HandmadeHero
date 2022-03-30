@@ -1,93 +1,103 @@
 #include <windows.h>
+#include <stdint.h>
 
 #define internal_variable static 
 #define local_persist static 
 #define global_variable static 
 
-global_variable bool Running;
-global_variable BITMAPINFO BitmapInfo = {}; // The BITMAPINFO structure defines the dimensions and color information for a DIB. 
-global_variable void* BitmapMemory;
-global_variable int BitmapWidth;
-global_variable int BitmapHeight;
-global_variable const unsigned char BytesPerPixel = 4;
-
-void RenderWeirdGradient(int xOffset, int yOffset)
+struct Win32WindowDimension
 {
-    const int pitch = BitmapWidth * BytesPerPixel;
-    unsigned char* row = (unsigned char*) BitmapMemory;
-    for(int y = 0; y < BitmapHeight; y++)
+    uint16_t Width;
+    uint16_t Height;
+};
+
+struct Win32BitmapBuffer
+{
+    BITMAPINFO Info = {};
+    void* Memory;
+    int Width;
+    int Height;
+    const uint8_t BytesPerPixel = 4;
+};
+
+global_variable bool Running;
+global_variable Win32BitmapBuffer GlobalBackBuffer;
+
+static Win32WindowDimension Win32GetWindowDimensions(HWND WindowHandle)
+{
+    RECT WindowRect;
+    GetClientRect(WindowHandle, &WindowRect);
+    Win32WindowDimension Dimensions =
     {
-        unsigned char* pixel = (unsigned char*) row;
-        for(int x = 0; x < BitmapWidth; x++)
+        WindowRect.right - WindowRect.left,
+        WindowRect.bottom - WindowRect.top
+    };
+    return Dimensions;
+}
+
+void RenderWeirdGradient(Win32BitmapBuffer backBuffer, int xOffset, int yOffset)
+{
+    const int pitch = backBuffer.Width * backBuffer.BytesPerPixel;
+    uint8_t* row = (uint8_t*) backBuffer.Memory;
+    for(int y = 0; y < backBuffer.Height; y++)
+    {
+        uint32_t* pixel = (uint32_t*) row;
+        for(int x = 0; x < backBuffer.Width; x++)
         {
-            // Blue
-            *pixel = (unsigned char) (x + xOffset);
-            pixel++;
-
-            // Green
-            *pixel = (unsigned char) (y + yOffset);
-            pixel++;
-
-            // Red
-            *pixel = (unsigned char) 0;
-            pixel++;
-
-            // Padding
-            *pixel = (unsigned char) 0;
-            pixel++;
+            uint8_t blue = x + xOffset;
+            uint8_t green = y + yOffset;
+            *pixel++ = ((green << 8) | blue);
         }
         row += pitch;
     }
 }
 
-void Win32ResizeDIBSection(long Width, long Height)
+void Win32ResizeDIBSection(Win32BitmapBuffer* backBuffer, long Width, long Height)
 {
-    if(BitmapMemory)
+    if(backBuffer->Memory)
     {
-        /*BOOL*/ VirtualFree(                       // Releases, decommits, or releases and decommits a region of pages within the virtual address space of the calling process.
-            BitmapMemory, // [in] LPVOID lpAddress, // A pointer to the base address of the region of pages to be freed.
-            NULL,         // [in] SIZE_T dwSize,    // The size of the region of memory to be freed, in bytes or NULL.
-            MEM_RELEASE   // [in] DWORD  dwFreeType // The type of free operation.
+        /*BOOL*/ VirtualFree(                             // Releases, decommits, or releases and decommits a region of pages within the virtual address space of the calling process.
+            backBuffer->Memory, // [in] LPVOID lpAddress, // A pointer to the base address of the region of pages to be freed.
+            NULL,               // [in] SIZE_T dwSize,    // The size of the region of memory to be freed, in bytes or NULL.
+            MEM_RELEASE         // [in] DWORD  dwFreeType // The type of free operation.
         );
     }
     
-    BitmapWidth = Width;
-    BitmapHeight = Height;
+    backBuffer->Width = Width;
+    backBuffer->Height = Height;
 
-    BitmapInfo.bmiHeader.biSize          = sizeof(BitmapInfo.bmiHeader); // The number of bytes required by the structure.
-    BitmapInfo.bmiHeader.biWidth         = BitmapWidth;                  // The width of the bitmap, in pixels.
-    BitmapInfo.bmiHeader.biHeight        = -BitmapHeight;                // The height of the bitmap, in pixels.
-    BitmapInfo.bmiHeader.biPlanes        = 1;                            // The number of planes for the target device. This value must be set to 1.
-    BitmapInfo.bmiHeader.biBitCount      = 32;                           // The number of bits-per-pixel.
-    BitmapInfo.bmiHeader.biCompression   = BI_RGB;                       // The type of compression for a compressed bottom-up bitmap (top-down DIBs cannot be compressed).
+    backBuffer->Info.bmiHeader.biSize          = sizeof(backBuffer->Info.bmiHeader); // The number of bytes required by the structure.
+    backBuffer->Info.bmiHeader.biWidth         = backBuffer->Width;                  // The width of the bitmap, in pixels.
+    backBuffer->Info.bmiHeader.biHeight        = -backBuffer->Height;                // The height of the bitmap, in pixels.
+    backBuffer->Info.bmiHeader.biPlanes        = 1;                                  // The number of planes for the target device. This value must be set to 1.
+    backBuffer->Info.bmiHeader.biBitCount      = 32;                                 // The number of bits-per-pixel.
+    backBuffer->Info.bmiHeader.biCompression   = BI_RGB;                             // The type of compression for a compressed bottom-up bitmap (top-down DIBs cannot be compressed).
 
-    long BitmapMemorySize = BitmapWidth * BitmapHeight * BytesPerPixel;
-    BitmapMemory = VirtualAlloc(                                     // Reserves, commits, or changes the state of a region of pages in the virtual address space of the calling process.
-        NULL,             // [in, optional] LPVOID lpAddress,        // The starting address of the region to allocate.
-        BitmapMemorySize, // [in]           SIZE_T dwSize,           // The size of the region, in bytes.
-        MEM_COMMIT,       // [in]           DWORD  flAllocationType, // The type of memory allocation.
-        PAGE_READWRITE    // [in]           DWORD  flProtect         // The memory protection for the region of pages to be allocated.
+    long BitmapMemorySize = backBuffer->Width * backBuffer->Height * backBuffer->BytesPerPixel;
+    backBuffer->Memory = VirtualAlloc(                                     // Reserves, commits, or changes the state of a region of pages in the virtual address space of the calling process.
+        NULL,             // [in, optional] LPVOID lpAddress,              // The starting address of the region to allocate.
+        BitmapMemorySize, // [in]           SIZE_T dwSize,                 // The size of the region, in bytes.
+        MEM_COMMIT,       // [in]           DWORD  flAllocationType,       // The type of memory allocation.
+        PAGE_READWRITE    // [in]           DWORD  flProtect               // The memory protection for the region of pages to be allocated.
     );
 }
 
-void Win32UpdateWindow(HDC DeviceContext, RECT* WindowRect)
+void Win32UpdateWindow(Win32BitmapBuffer backBuffer, HDC DeviceContext, uint16_t WindowWidth, uint16_t WindowHeight)
 {
-    int WindowHeight = WindowRect->bottom - WindowRect->top;
-    int WindowWidth = WindowRect->right - WindowRect->left;
     /*int*/ StretchDIBits(
-        DeviceContext,  // [in] HDC              hdc,
-        0,              // [in] int              xDest,
-        0,              // [in] int              yDest,
-        BitmapWidth,    // [in] int              DestWidth,
-        BitmapHeight,   // [in] int              DestHeight,
-        0,              // [in] int              xSrc,
-        0,              // [in] int              ySrc,
-        WindowWidth,    // [in] int              SrcWidth,
-        WindowHeight,   // [in] int              SrcHeight,
-        BitmapMemory,   // [in] const VOID * lpBits,
-        &BitmapInfo,    // [in] const BITMAPINFO * lpbmi,
-        DIB_RGB_COLORS, // [in] UINT             iUsage,
-        SRCCOPY         // [in] DWORD            rop
+        DeviceContext,       // [in] HDC              hdc,
+        0,                   // [in] int              xDest,
+        0,                   // [in] int              yDest,
+        WindowWidth,         // [in] int              DestWidth,
+        WindowHeight,        // [in] int              DestHeight,
+        0,                   // [in] int              xSrc,
+        0,                   // [in] int              ySrc,
+        backBuffer.Width,    // [in] int              SrcWidth,
+        backBuffer.Height,   // [in] int              SrcHeight,
+        backBuffer.Memory,   // [in] const VOID * lpBits,
+        &backBuffer.Info,    // [in] const BITMAPINFO * lpbmi,
+        DIB_RGB_COLORS,      // [in] UINT             iUsage,
+        SRCCOPY              // [in] DWORD            rop
     );
 }
 
@@ -104,14 +114,6 @@ LRESULT CALLBACK Win32MainWindowCallback( // Passes message information to the s
     {
     case WM_SIZE:
     {
-        RECT ClientRect;
-        /*BOOL*/ GetClientRect(                  // Retrieves the coordinates of a window's client area.
-            WindowHandle, // [in]  HWND   hWnd,  // A handle to the window whose client coordinates are to be retrieved.
-            &ClientRect   // [out] LPRECT lpRect // A pointer to a RECT structure that receives the client coordinates.
-        );
-
-        Win32ResizeDIBSection(ClientRect.right, ClientRect.bottom);
-
         /*void*/ OutputDebugString(                               // Sends a string to the debugger for display.
             L"WM_SIZE\n" // [in, optional] LPCWSTR lpOutputString // The null-terminated string to be displayed.
         );
@@ -153,13 +155,8 @@ LRESULT CALLBACK Win32MainWindowCallback( // Passes message information to the s
             &Paint        // [out] LPPAINTSTRUCT lpPaint // Pointer to the PAINTSTRUCT structure that will receive painting information.
         );
 
-        RECT ClientRect;
-        /*BOOL*/ GetClientRect(                  // Retrieves the coordinates of a window's client area.
-            WindowHandle, // [in]  HWND   hWnd,  // A handle to the window whose client coordinates are to be retrieved.
-            &ClientRect   // [out] LPRECT lpRect // A pointer to a RECT structure that receives the client coordinates.
-        );
-
-        Win32UpdateWindow(DeviceContext, &ClientRect);
+        Win32WindowDimension Dimensions = Win32GetWindowDimensions(WindowHandle);
+        Win32UpdateWindow(GlobalBackBuffer, DeviceContext, Dimensions.Width, Dimensions.Height);
 
         /*BOOL*/ EndPaint(                                    // The EndPaint function marks the end of painting in the specified window.
             WindowHandle, // [in] HWND              hWnd,     // Handle to the window that has been repainted.
@@ -208,6 +205,7 @@ int WINAPI wWinMain(
 )
 {
     WNDCLASSEXW WindowClass = {};                          // Contains window class information. It is used with the RegisterClassEx and GetClassInfoEx functions.
+    WindowClass.style = CS_HREDRAW|CS_VREDRAW;
     WindowClass.cbSize = sizeof(WNDCLASSEXW);              // The size, in bytes, of this structure.
     WindowClass.lpfnWndProc = Win32MainWindowCallback;     // The callback function that was deffined above. Windows will send messages to it.
     WindowClass.hInstance = Instance;                      // A handle to the instance that contains the window procedure for the class.
@@ -243,6 +241,8 @@ int WINAPI wWinMain(
         return 1;
     }
 
+    Win32ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
+
     Running = true;
     MSG Message;
     int xOffset = 0;
@@ -265,12 +265,11 @@ int WINAPI wWinMain(
 
         }
 
-        RenderWeirdGradient(xOffset, yOffset);
+        RenderWeirdGradient(GlobalBackBuffer, xOffset, yOffset);
 
         HDC DeviceContext = GetDC(WindowHandle);
-        RECT ClientRect;
-        GetClientRect(WindowHandle, &ClientRect);
-        Win32UpdateWindow(DeviceContext, &ClientRect);
+        Win32WindowDimension Dimensions = Win32GetWindowDimensions(WindowHandle);
+        Win32UpdateWindow(GlobalBackBuffer, DeviceContext, Dimensions.Width, Dimensions.Height);
         ReleaseDC(WindowHandle, DeviceContext);
 
         xOffset++;
