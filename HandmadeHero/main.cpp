@@ -1,5 +1,23 @@
 #include <windows.h>
 #include <stdint.h>
+#include <Xinput.h>
+
+#define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
+typedef X_INPUT_GET_STATE(x_input_get_state);
+X_INPUT_GET_STATE(XInputGetStateStub)
+{
+    return 0;
+}
+#define XInputGetState XInputGetState_
+
+#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION* pVibration)
+typedef X_INPUT_SET_STATE(x_input_set_state);
+X_INPUT_SET_STATE(XInputSetStateStub)
+{
+    return 0;
+}
+#define XInputSetState XInputSetState_
+
 
 #define internal_variable static 
 #define local_persist static 
@@ -7,8 +25,8 @@
 
 struct Win32WindowDimension
 {
-    uint16_t Width;
-    uint16_t Height;
+    long Width;
+    long Height;
 };
 
 struct Win32BitmapBuffer
@@ -22,6 +40,23 @@ struct Win32BitmapBuffer
 
 global_variable bool Running;
 global_variable Win32BitmapBuffer GlobalBackBuffer;
+global_variable x_input_get_state* XInputGetState_ = XInputGetStateStub;
+global_variable x_input_set_state* XInputSetState_ = XInputSetStateStub;
+
+static void Win32LoadXInputLibrary(void)
+{
+    HMODULE XInputLibrary = LoadLibraryExA(
+        "xinput1_4.dll", //[in] LPCSTR lpLibFileName,
+        NULL,             //HANDLE hFile,
+        NULL              //[in] DWORD  dwFlags
+    );
+
+    if(XInputLibrary)
+    {
+        XInputGetState = (x_input_get_state*) GetProcAddress(XInputLibrary, "XInputGetState");
+        XInputSetState = (x_input_set_state*) GetProcAddress(XInputLibrary, "XInputSetState");
+    }
+}
 
 static Win32WindowDimension Win32GetWindowDimensions(HWND WindowHandle)
 {
@@ -35,14 +70,14 @@ static Win32WindowDimension Win32GetWindowDimensions(HWND WindowHandle)
     return Dimensions;
 }
 
-void RenderWeirdGradient(Win32BitmapBuffer backBuffer, int xOffset, int yOffset)
+void RenderWeirdGradient(Win32BitmapBuffer* backBuffer, int xOffset, int yOffset)
 {
-    const int pitch = backBuffer.Width * backBuffer.BytesPerPixel;
-    uint8_t* row = (uint8_t*) backBuffer.Memory;
-    for(int y = 0; y < backBuffer.Height; y++)
+    const int pitch = backBuffer->Width * backBuffer->BytesPerPixel;
+    uint8_t* row = (uint8_t*) backBuffer->Memory;
+    for(int y = 0; y < backBuffer->Height; y++)
     {
         uint32_t* pixel = (uint32_t*) row;
-        for(int x = 0; x < backBuffer.Width; x++)
+        for(int x = 0; x < backBuffer->Width; x++)
         {
             uint8_t blue = x + xOffset;
             uint8_t green = y + yOffset;
@@ -63,15 +98,15 @@ void Win32ResizeDIBSection(Win32BitmapBuffer* backBuffer, long Width, long Heigh
         );
     }
     
-    backBuffer->Width = Width;
+    backBuffer->Width  = Width;
     backBuffer->Height = Height;
 
-    backBuffer->Info.bmiHeader.biSize          = sizeof(backBuffer->Info.bmiHeader); // The number of bytes required by the structure.
-    backBuffer->Info.bmiHeader.biWidth         = backBuffer->Width;                  // The width of the bitmap, in pixels.
-    backBuffer->Info.bmiHeader.biHeight        = -backBuffer->Height;                // The height of the bitmap, in pixels.
-    backBuffer->Info.bmiHeader.biPlanes        = 1;                                  // The number of planes for the target device. This value must be set to 1.
-    backBuffer->Info.bmiHeader.biBitCount      = 32;                                 // The number of bits-per-pixel.
-    backBuffer->Info.bmiHeader.biCompression   = BI_RGB;                             // The type of compression for a compressed bottom-up bitmap (top-down DIBs cannot be compressed).
+    backBuffer->Info.bmiHeader.biSize        = sizeof(backBuffer->Info.bmiHeader); // The number of bytes required by the structure.
+    backBuffer->Info.bmiHeader.biWidth       = backBuffer->Width;                  // The width of the bitmap, in pixels.
+    backBuffer->Info.bmiHeader.biHeight      = -backBuffer->Height;                // The height of the bitmap, in pixels.
+    backBuffer->Info.bmiHeader.biPlanes      = 1;                                  // The number of planes for the target device. This value must be set to 1.
+    backBuffer->Info.bmiHeader.biBitCount    = 32;                                 // The number of bits-per-pixel.
+    backBuffer->Info.bmiHeader.biCompression = BI_RGB;                             // The type of compression for a compressed bottom-up bitmap (top-down DIBs cannot be compressed).
 
     long BitmapMemorySize = backBuffer->Width * backBuffer->Height * backBuffer->BytesPerPixel;
     backBuffer->Memory = VirtualAlloc(                                     // Reserves, commits, or changes the state of a region of pages in the virtual address space of the calling process.
@@ -82,22 +117,22 @@ void Win32ResizeDIBSection(Win32BitmapBuffer* backBuffer, long Width, long Heigh
     );
 }
 
-void Win32UpdateWindow(Win32BitmapBuffer backBuffer, HDC DeviceContext, uint16_t WindowWidth, uint16_t WindowHeight)
+void Win32UpdateWindow(Win32BitmapBuffer* backBuffer, HDC DeviceContext, long WindowWidth, long WindowHeight)
 {
     /*int*/ StretchDIBits(
-        DeviceContext,       // [in] HDC              hdc,
-        0,                   // [in] int              xDest,
-        0,                   // [in] int              yDest,
-        WindowWidth,         // [in] int              DestWidth,
-        WindowHeight,        // [in] int              DestHeight,
-        0,                   // [in] int              xSrc,
-        0,                   // [in] int              ySrc,
-        backBuffer.Width,    // [in] int              SrcWidth,
-        backBuffer.Height,   // [in] int              SrcHeight,
-        backBuffer.Memory,   // [in] const VOID * lpBits,
-        &backBuffer.Info,    // [in] const BITMAPINFO * lpbmi,
-        DIB_RGB_COLORS,      // [in] UINT             iUsage,
-        SRCCOPY              // [in] DWORD            rop
+        DeviceContext,     // [in] HDC              hdc,
+        0,                 // [in] int              xDest,
+        0,                 // [in] int              yDest,
+        WindowWidth,       // [in] int              DestWidth,
+        WindowHeight,      // [in] int              DestHeight,
+        0,                 // [in] int              xSrc,
+        0,                 // [in] int              ySrc,
+        backBuffer->Width,  // [in] int              SrcWidth,
+        backBuffer->Height, // [in] int              SrcHeight,
+        backBuffer->Memory, // [in] const VOID * lpBits,
+        &backBuffer->Info,  // [in] const BITMAPINFO * lpbmi,
+        DIB_RGB_COLORS,    // [in] UINT             iUsage,
+        SRCCOPY            // [in] DWORD            rop
     );
 }
 
@@ -156,13 +191,58 @@ LRESULT CALLBACK Win32MainWindowCallback( // Passes message information to the s
         );
 
         Win32WindowDimension Dimensions = Win32GetWindowDimensions(WindowHandle);
-        Win32UpdateWindow(GlobalBackBuffer, DeviceContext, Dimensions.Width, Dimensions.Height);
+        Win32UpdateWindow(&GlobalBackBuffer, DeviceContext, Dimensions.Width, Dimensions.Height);
 
         /*BOOL*/ EndPaint(                                    // The EndPaint function marks the end of painting in the specified window.
             WindowHandle, // [in] HWND              hWnd,     // Handle to the window that has been repainted.
             &Paint        // [in] const PAINTSTRUCT * lpPaint // Pointer to a PAINTSTRUCT structure that contains the painting information retrieved by BeginPaint.
         );
     } break;
+
+    case WM_SYSKEYDOWN:
+    case WM_SYSKEYUP:
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+    {
+        bool WasDown = (LParam & 1 << 30) != 0;
+        bool IsDown = (LParam & 1 << 31) == 0;
+        if(WasDown == IsDown)
+        {
+            break;
+        }
+        
+        uint32_t VKCode = WParam;
+        if(VKCode == 'W')
+        {
+        }
+        else if(VKCode == 'A')
+        {
+        }
+        else if(VKCode == 'S')
+        {
+        }
+        else if(VKCode == 'D')
+        {
+        }
+        else if(VKCode == VK_UP)
+        {
+        }
+        else if(VKCode == VK_LEFT)
+        {
+        }
+        else if(VKCode == VK_DOWN)
+        {
+        }
+        else if(VKCode == VK_RIGHT)
+        {
+        }
+        else if(VKCode == VK_ESCAPE)
+        {
+        }
+        else if(VKCode == VK_SPACE)
+        {
+        }
+    }
 
     default:
     {
@@ -247,6 +327,7 @@ int WINAPI wWinMain(
     MSG Message;
     int xOffset = 0;
     int yOffset = 0;
+    Win32LoadXInputLibrary();
     while (Running) {
         while(PeekMessageW(&Message, NULL, NULL, NULL, PM_REMOVE))
         {
@@ -265,14 +346,40 @@ int WINAPI wWinMain(
 
         }
 
-        RenderWeirdGradient(GlobalBackBuffer, xOffset, yOffset);
+        for(DWORD ControllerIndex = 0; ControllerIndex < XUSER_MAX_COUNT; ControllerIndex++)
+        {
+            XINPUT_STATE InputState = {};
+            if(XInputGetState(ControllerIndex, &InputState) == ERROR_SUCCESS)
+            {
+                XINPUT_GAMEPAD* GamePad = &InputState.Gamepad;
+
+                bool Up            = GamePad->wButtons & XINPUT_GAMEPAD_DPAD_UP;
+                bool Down          = GamePad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN;
+                bool Left          = GamePad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT;
+                bool Right         = GamePad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT;
+                bool Start         = GamePad->wButtons & XINPUT_GAMEPAD_START;
+                bool Back          = GamePad->wButtons & XINPUT_GAMEPAD_BACK;
+                bool LeftShoulder  = GamePad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER;
+                bool RightShoulder = GamePad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER;
+                bool AButton       = GamePad->wButtons & XINPUT_GAMEPAD_A;
+                bool BButton       = GamePad->wButtons & XINPUT_GAMEPAD_B;
+                bool XButton       = GamePad->wButtons & XINPUT_GAMEPAD_X;
+                bool YButton       = GamePad->wButtons & XINPUT_GAMEPAD_Y;
+
+                short StickX = GamePad->sThumbLX;
+                short StickY = GamePad->sThumbLY;
+
+                xOffset += StickX >> 16;
+                yOffset += StickY >> 16;
+            }
+        }
+
+        RenderWeirdGradient(&GlobalBackBuffer, xOffset, yOffset);
 
         HDC DeviceContext = GetDC(WindowHandle);
         Win32WindowDimension Dimensions = Win32GetWindowDimensions(WindowHandle);
-        Win32UpdateWindow(GlobalBackBuffer, DeviceContext, Dimensions.Width, Dimensions.Height);
+        Win32UpdateWindow(&GlobalBackBuffer, DeviceContext, Dimensions.Width, Dimensions.Height);
         ReleaseDC(WindowHandle, DeviceContext);
-
-        xOffset++;
     }
 
     return 0;
