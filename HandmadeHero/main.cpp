@@ -1,12 +1,16 @@
 #include <windows.h>
 #include <stdint.h>
-#include <Xinput.h>
+#include <xinput.h>
+#include <dsound.h>
+
+#define DIRECT_SOUND_CREATE(name) _Check_return_ HRESULT WINAPI name(_In_opt_ LPCGUID pcGuidDevice, _Outptr_ LPDIRECTSOUND *ppDS, _Pre_null_ LPUNKNOWN pUnkOuter);
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
 typedef X_INPUT_GET_STATE(x_input_get_state);
 X_INPUT_GET_STATE(XInputGetStateStub)
 {
-    return 0;
+    return ERROR_DEVICE_NOT_CONNECTED;
 }
 #define XInputGetState XInputGetState_
 
@@ -14,7 +18,7 @@ X_INPUT_GET_STATE(XInputGetStateStub)
 typedef X_INPUT_SET_STATE(x_input_set_state);
 X_INPUT_SET_STATE(XInputSetStateStub)
 {
-    return 0;
+    return ERROR_DEVICE_NOT_CONNECTED;
 }
 #define XInputSetState XInputSetState_
 
@@ -43,13 +47,85 @@ global_variable Win32BitmapBuffer GlobalBackBuffer;
 global_variable x_input_get_state* XInputGetState_ = XInputGetStateStub;
 global_variable x_input_set_state* XInputSetState_ = XInputSetStateStub;
 
+static void Win32InitDSound(HWND WindowHandle, uint32_t SamplesPerSec, uint32_t BufferSize)
+{
+    HMODULE DSoundLibrary = LoadLibraryExW(L"dsound.dll", NULL, NULL);
+    if(DSoundLibrary)
+    {
+        direct_sound_create* DirectSoundCreate = (direct_sound_create*)GetProcAddress(DSoundLibrary, "DirectSoundCreate");
+
+        LPDIRECTSOUND DirectSound;
+        if(DirectSoundCreate && SUCCEEDED(DirectSoundCreate(NULL, &DirectSound, NULL)))
+        {
+            HRESULT SetCooperativeLevelResult = DirectSound->SetCooperativeLevel(
+                WindowHandle,  //HWND  unnamedParam1, // Handle to the window associated with the interface.
+                DSSCL_PRIORITY //DWORD unnamedParam2  // Specifies one of a set of flags that describe the level of cooperation associated with the device.
+            );
+
+            if(SUCCEEDED(SetCooperativeLevelResult))
+            {
+                WAVEFORMATEX WaveFormat = {};
+                WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+                WaveFormat.nChannels = 2;
+                WaveFormat.nSamplesPerSec = SamplesPerSec;
+                WaveFormat.wBitsPerSample = 16;
+                WaveFormat.nBlockAlign = WaveFormat.nChannels * WaveFormat.wBitsPerSample / 8;
+                WaveFormat.nAvgBytesPerSec = WaveFormat.nSamplesPerSec * WaveFormat.nBlockAlign;
+
+                DSBUFFERDESC PrimaryBufferDescription = {};
+                PrimaryBufferDescription.dwSize       = sizeof(PrimaryBufferDescription);
+                PrimaryBufferDescription.dwFlags      = DSBCAPS_PRIMARYBUFFER;
+                
+                LPDIRECTSOUNDBUFFER PrimaryBuffer;
+                HRESULT CreatePrimarySoundBufferResult = DirectSound->CreateSoundBuffer(
+                    &PrimaryBufferDescription, // Address of a DSBUFFERDESC structure that contains the description of the sound buffer to be created.
+                    &PrimaryBuffer,            // Address of a pointer to the new DirectSoundBuffer object.
+                    NULL                       // Controlling unknown of the aggregate. Its value must be NULL.
+                );
+
+                if(SUCCEEDED(CreatePrimarySoundBufferResult))
+                {
+                    PrimaryBuffer->SetFormat(&WaveFormat);
+                }
+
+                DSBUFFERDESC SecondaryBufferDescription  = {};
+                SecondaryBufferDescription.dwSize        = sizeof(SecondaryBufferDescription);
+                SecondaryBufferDescription.dwBufferBytes = BufferSize;
+                SecondaryBufferDescription.lpwfxFormat   = &WaveFormat;
+                
+                LPDIRECTSOUNDBUFFER SecondaryBuffer;
+                HRESULT CreateSecondarySoundBufferResult = DirectSound->CreateSoundBuffer(
+                    &SecondaryBufferDescription, // Address of a DSBUFFERDESC structure that contains the description of the sound buffer to be created.
+                    &SecondaryBuffer,              // Address of a pointer to the new DirectSoundBuffer object.
+                    NULL                         // Controlling unknown of the aggregate. Its value must be NULL.
+                );
+
+                if(SUCCEEDED(CreateSecondarySoundBufferResult))
+                {
+                    SecondaryBuffer->SetFormat(&WaveFormat);
+                }
+                
+            }
+        }
+    }
+}
+
 static void Win32LoadXInputLibrary(void)
 {
-    HMODULE XInputLibrary = LoadLibraryExA(
-        "xinput1_4.dll", //[in] LPCSTR lpLibFileName,
+    HMODULE XInputLibrary = LoadLibraryExW(
+        L"xinput1_4.dll", //[in] LPCSTR lpLibFileName,
         NULL,             //HANDLE hFile,
         NULL              //[in] DWORD  dwFlags
     );
+    
+    if(!XInputLibrary)
+    {
+        HMODULE XInputLibrary = LoadLibraryExA(
+            "xinput1_3.dll", //[in] LPCSTR lpLibFileName,
+            NULL,             //HANDLE hFile,
+            NULL              //[in] DWORD  dwFlags
+        );
+    }
 
     if(XInputLibrary)
     {
@@ -242,6 +318,12 @@ LRESULT CALLBACK Win32MainWindowCallback( // Passes message information to the s
         else if(VKCode == VK_SPACE)
         {
         }
+
+        bool AltKeyIsDown = (LParam & 1 << 29) != 0;
+        if(AltKeyIsDown && VKCode == VK_F4)
+        {
+            Running = false;
+        }
     }
 
     default:
@@ -328,6 +410,7 @@ int WINAPI wWinMain(
     int xOffset = 0;
     int yOffset = 0;
     Win32LoadXInputLibrary();
+    Win32InitDSound(WindowHandle, 48000, 48000);
     while (Running) {
         while(PeekMessageW(&Message, NULL, NULL, NULL, PM_REMOVE))
         {
